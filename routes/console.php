@@ -11,6 +11,9 @@ Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
 })->purpose('Display an inspiring quote');
 
+// Despacha os SMS agendados cuja hora já chegou (a cada minuto).
+Schedule::command('sms:dispatch-scheduled')->everyMinute()->withoutOverlapping();
+
 // Sincroniza dispositivos httpSMS a cada 5 minutos.
 Schedule::job(new SyncDevicesJob)->everyFiveMinutes()->withoutOverlapping();
 

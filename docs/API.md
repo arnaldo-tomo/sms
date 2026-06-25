@@ -35,7 +35,7 @@ Corpo:
 |---|---|---|---|
 | `to` | string \| string[] | sim | Número(s) destino em E.164 (`+258…`). Array para envio em série. |
 | `content` | string | sim | Texto da mensagem (até 1600 caracteres). |
-| `from` | string | não | Número de origem (tem de ser um número da empresa). Por omissão usa o 1º. |
+| `from` | string | não | Número de origem a escolher do **pool da plataforma** (`GET /numbers`). Se omitido, o sistema escolhe um número (prefere um online). |
 
 ### Um destinatário
 ```bash
@@ -72,8 +72,8 @@ Resposta `201`:
 
 ### Erros possíveis
 ```json
-{ "error": "company_not_configured", "message": "A empresa não tem a integração httpSMS configurada." } // 422
-{ "error": "no_sender_number", "message": "A empresa não tem nenhum número associado." }                // 422
+{ "error": "platform_not_configured", "message": "O serviço de SMS não está disponível de momento." }   // 503
+{ "error": "no_sender_number", "message": "O número '+...' não está disponível." }                       // 422
 { "error": "validation_failed", "errors": { "to": ["..."] } }                                            // 422
 ```
 
@@ -90,7 +90,9 @@ Estados possíveis: `queued` → `sending` → `sent` → `delivered` (ou `faile
 ## Listar mensagens — `GET /api/v1/sms`
 Query: `?status=delivered&per_page=50`
 
-## Números da empresa — `GET /api/v1/numbers`
+## Números disponíveis — `GET /api/v1/numbers`
+Lista os números que a empresa pode usar no `from` (o pool da plataforma, ou os números
+atribuídos a essa empresa, se houver).
 ```json
 { "data": [ { "phone_number": "+258846474687", "name": "…", "status": "online", "last_seen_at": "…" } ] }
 ```
@@ -132,8 +134,11 @@ $assinaturaOk = hash_equals(
 
 ---
 
-## Modelo
+## Modelo (centralizado / revenda)
 
-- Cada **empresa** traz a **sua conta httpSMS** (API key própria) e os **seus números**.
-- Os SMS enviados pela API saem **dos números dessa empresa**.
-- As mensagens, números e tokens estão **isolados por empresa** (multi-tenant).
+- A **plataforma** é dona da conta httpSMS e de **todos os números** (o pool).
+- A empresa **não configura httpSMS** — apenas autentica com o token e **escolhe o número**
+  (`from`) de onde quer enviar, do pool disponível em `GET /numbers`.
+- Se `from` for omitido, o sistema **escolhe automaticamente** um número (prefere online).
+- As mensagens e tokens continuam **isolados por empresa** (cada empresa só vê os seus).
+- O envio sai sempre pela conta httpSMS **da plataforma**.

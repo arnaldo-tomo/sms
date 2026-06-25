@@ -2,14 +2,12 @@
 
 namespace App\Http\Controllers;
 
-use App\Exceptions\HttpSmsException;
 use App\Models\Company;
 use App\Models\CompanyToken;
+use App\Models\Device;
 use App\Services\CompanyTokenService;
-use App\Services\DeviceService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Validation\Rule;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -20,8 +18,11 @@ class CompanyController extends Controller
         $this->authorize('viewAny', Company::class);
 
         $companies = Company::query()
-            ->withCount(['devices', 'tokens', 'messages'])
-            ->with(['tokens' => fn ($q) => $q->whereNull('revoked_at')->latest()])
+            ->withCount(['tokens', 'messages'])
+            ->with([
+                'tokens' => fn ($q) => $q->whereNull('revoked_at')->latest(),
+                'devices' => fn ($q) => $q->select('id', 'company_id', 'phone_number', 'name', 'status'),
+            ])
             ->latest()
             ->get()
             ->map(fn (Company $c) => [
@@ -29,13 +30,17 @@ class CompanyController extends Controller
                 'name' => $c->name,
                 'slug' => $c->slug,
                 'contact_email' => $c->contact_email,
-                'httpsms_base_url' => $c->httpsms_base_url,
-                'httpsms_api_key_set' => filled($c->httpsms_api_key),
                 'status_callback_url' => $c->status_callback_url,
                 'messages_per_minute' => $c->messages_per_minute,
+                'price_per_segment' => (float) $c->price_per_segment,
+                'currency' => $c->currency,
                 'is_active' => $c->is_active,
-                'devices_count' => $c->devices_count,
                 'messages_count' => $c->messages_count,
+                'numbers' => $c->devices->map(fn (Device $d) => [
+                    'id' => $d->id,
+                    'phone_number' => $d->phone_number,
+                    'status' => $d->status,
+                ]),
                 'tokens' => $c->tokens->map(fn (CompanyToken $t) => [
                     'id' => $t->id,
                     'name' => $t->name,
@@ -44,9 +49,113 @@ class CompanyController extends Controller
                 ]),
             ]);
 
+        // Números no pool partilhado (sem empresa) — disponíveis para atribuir.
+        $availableNumbers = Device::whereNull('company_id')
+            ->where('is_active', true)
+            ->get(['id', 'phone_number', 'status'])
+            ->map(fn (Device $d) => [
+                'id' => $d->id,
+                'phone_number' => $d->phone_number,
+                'status' => $d->status,
+            ]);
+
         return Inertia::render('Companies/Index', [
             'companies' => $companies,
+            'availableNumbers' => $availableNumbers,
         ]);
+    }
+
+    public function usage(Company $company): Response
+    {
+        $this->authorize('viewAny', Company::class);
+
+        $base = $company->messages()->outbound();
+
+        // Contagens por estado (todo o histórico).
+        $byStatus = (clone $base)
+            ->selectRaw('status, count(*) as total, coalesce(sum(segments),0) as segs')
+            ->groupBy('status')
+            ->get()
+            ->keyBy('status');
+
+        $count = fn (array $statuses) => collect($statuses)->sum(fn ($s) => (int) ($byStatus[$s]->total ?? 0));
+        $segs = fn (array $statuses) => collect($statuses)->sum(fn ($s) => (int) ($byStatus[$s]->segs ?? 0));
+
+        $sentStatuses = ['sent', 'delivered'];
+        $billableSegments = $segs($sentStatuses);
+
+        // Este mês.
+        $monthBase = (clone $base)->where('created_at', '>=', now()->startOfMonth());
+        $monthSegments = (clone $monthBase)->whereIn('status', $sentStatuses)->sum('segments');
+        $monthCount = (clone $monthBase)->count();
+
+        // Utilização diária (últimos 30 dias).
+        $since = now()->subDays(29)->startOfDay();
+        $rows = (clone $base)->where('created_at', '>=', $since)->get(['status', 'segments', 'created_at']);
+        $daily = [];
+        for ($i = 0; $i < 30; $i++) {
+            $d = $since->copy()->addDays($i)->toDateString();
+            $daily[$d] = ['date' => $d, 'sent' => 0, 'delivered' => 0, 'failed' => 0];
+        }
+        foreach ($rows as $r) {
+            $d = $r->created_at->toDateString();
+            if (! isset($daily[$d])) {
+                continue;
+            }
+            if (in_array($r->status, ['failed', 'expired'], true)) {
+                $daily[$d]['failed']++;
+            } elseif ($r->status === 'delivered') {
+                $daily[$d]['delivered']++;
+                $daily[$d]['sent']++;
+            } elseif ($r->status === 'sent') {
+                $daily[$d]['sent']++;
+            }
+        }
+
+        $price = (float) $company->price_per_segment;
+
+        return Inertia::render('Companies/Usage', [
+            'company' => [
+                'id' => $company->id,
+                'name' => $company->name,
+                'currency' => $company->currency,
+                'price_per_segment' => $price,
+                'messages_per_minute' => $company->messages_per_minute,
+            ],
+            'stats' => [
+                'total' => $count(['pending', 'scheduled', 'queued', 'sending', 'sent', 'delivered', 'failed', 'expired']),
+                'sent' => $count($sentStatuses),
+                'delivered' => $count(['delivered']),
+                'failed' => $count(['failed', 'expired']),
+                'pending' => $count(['pending', 'scheduled', 'queued', 'sending']),
+                'billable_segments' => $billableSegments,
+                'total_cost' => round($billableSegments * $price, 2),
+                'month_count' => $monthCount,
+                'month_segments' => (int) $monthSegments,
+                'month_cost' => round($monthSegments * $price, 2),
+            ],
+            'daily' => array_values($daily),
+        ]);
+    }
+
+    public function assignNumber(Request $request, Company $company): RedirectResponse
+    {
+        $this->authorize('update', $company);
+
+        $data = $request->validate(['device_id' => ['required', 'integer', 'exists:devices,id']]);
+        Device::where('id', $data['device_id'])->update(['company_id' => $company->id]);
+
+        return back()->with('success', 'Número atribuído à empresa.');
+    }
+
+    public function unassignNumber(Company $company, Device $device): RedirectResponse
+    {
+        $this->authorize('update', $company);
+
+        abort_unless($device->company_id === $company->id, 404);
+        $device->update(['company_id' => null]);
+
+        return back()->with('success', 'Número devolvido ao pool partilhado.');
     }
 
     public function store(Request $request, CompanyTokenService $tokens): RedirectResponse
@@ -67,12 +176,9 @@ class CompanyController extends Controller
     {
         $this->authorize('update', $company);
 
-        $data = $this->validateData($request, $company);
+        $data = $this->validateData($request);
 
-        // Não sobrescrever a API key se vier vazia.
-        if (blank($data['httpsms_api_key'] ?? null)) {
-            unset($data['httpsms_api_key']);
-        }
+        // Não sobrescrever o segredo do callback se vier vazio.
         if (blank($data['callback_secret'] ?? null)) {
             unset($data['callback_secret']);
         }
@@ -112,32 +218,19 @@ class CompanyController extends Controller
         return back()->with('success', 'Token revogado.');
     }
 
-    public function sync(Company $company, DeviceService $devices): RedirectResponse
-    {
-        $this->authorize('update', $company);
-
-        try {
-            $count = $devices->sync($company);
-
-            return back()->with('success', "{$count} dispositivo(s) sincronizado(s) para {$company->name}.");
-        } catch (HttpSmsException $e) {
-            return back()->with('error', $e->getMessage());
-        }
-    }
-
     /**
      * @return array<string, mixed>
      */
-    private function validateData(Request $request, ?Company $company = null): array
+    private function validateData(Request $request): array
     {
         return $request->validate([
             'name' => ['required', 'string', 'max:255'],
             'contact_email' => ['nullable', 'email', 'max:255'],
-            'httpsms_api_key' => ['nullable', 'string', 'max:255'],
-            'httpsms_base_url' => ['required', 'url', 'max:255'],
             'status_callback_url' => ['nullable', 'url', 'max:255'],
             'callback_secret' => ['nullable', 'string', 'max:255'],
             'messages_per_minute' => ['required', 'integer', 'min:1', 'max:6000'],
+            'price_per_segment' => ['required', 'numeric', 'min:0'],
+            'currency' => ['required', 'string', 'max:8'],
             'is_active' => ['boolean'],
         ]);
     }

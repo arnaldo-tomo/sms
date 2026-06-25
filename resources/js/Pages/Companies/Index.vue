@@ -3,9 +3,9 @@ import Modal from '@/Components/Modal.vue';
 import Card from '@/Components/ui/Card.vue';
 import StatusBadge from '@/Components/ui/StatusBadge.vue';
 import AppLayout from '@/Layouts/AppLayout.vue';
-import { Head, router, useForm, usePage } from '@inertiajs/vue3';
+import { Head, Link, router, useForm, usePage } from '@inertiajs/vue3';
 import {
-    ArrowPathIcon,
+    ChartBarIcon,
     ClipboardDocumentIcon,
     KeyIcon,
     PencilSquareIcon,
@@ -20,22 +20,41 @@ interface Token {
     prefix: string;
     last_used_at: string | null;
 }
+interface Number {
+    id: number;
+    phone_number: string;
+    status: string;
+}
 interface Company {
     id: number;
     name: string;
     slug: string;
     contact_email: string | null;
-    httpsms_base_url: string;
-    httpsms_api_key_set: boolean;
     status_callback_url: string | null;
     messages_per_minute: number;
+    price_per_segment: number;
+    currency: string;
     is_active: boolean;
-    devices_count: number;
     messages_count: number;
+    numbers: Number[];
     tokens: Token[];
 }
 
-defineProps<{ companies: Company[] }>();
+defineProps<{ companies: Company[]; availableNumbers: Number[] }>();
+
+const selectedNumber = ref<Record<number, number | ''>>({});
+
+function assignNumber(c: Company) {
+    const deviceId = selectedNumber.value[c.id];
+    if (!deviceId) return;
+    router.post(route('companies.numbers.assign', c.id), { device_id: deviceId }, {
+        preserveScroll: true,
+        onSuccess: () => (selectedNumber.value[c.id] = ''),
+    });
+}
+function unassignNumber(c: Company, n: Number) {
+    router.delete(route('companies.numbers.unassign', [c.id, n.id]), { preserveScroll: true });
+}
 
 const page = usePage();
 const newToken = computed(() => page.props.flash?.new_token as string | null);
@@ -47,11 +66,11 @@ const editingId = ref<number | null>(null);
 const form = useForm({
     name: '',
     contact_email: '',
-    httpsms_api_key: '',
-    httpsms_base_url: 'https://api.httpsms.com/v1',
     status_callback_url: '',
     callback_secret: '',
     messages_per_minute: 60,
+    price_per_segment: 0,
+    currency: 'MZN',
     is_active: true,
 });
 
@@ -64,11 +83,11 @@ function openEdit(c: Company) {
     editingId.value = c.id;
     form.name = c.name;
     form.contact_email = c.contact_email ?? '';
-    form.httpsms_api_key = '';
-    form.httpsms_base_url = c.httpsms_base_url;
     form.status_callback_url = c.status_callback_url ?? '';
     form.callback_secret = '';
     form.messages_per_minute = c.messages_per_minute;
+    form.price_per_segment = c.price_per_segment;
+    form.currency = c.currency;
     form.is_active = c.is_active;
     showModal.value = true;
 }
@@ -87,9 +106,6 @@ function genToken(c: Company) {
 function revokeToken(c: Company, t: Token) {
     if (confirm('Revogar este token? As apps que o usam deixam de funcionar.'))
         router.delete(route('companies.tokens.revoke', [c.id, t.id]), { preserveScroll: true });
-}
-function syncDevices(c: Company) {
-    router.post(route('companies.sync', c.id), {}, { preserveScroll: true });
 }
 function copy(text: string) {
     navigator.clipboard.writeText(text);
@@ -130,16 +146,35 @@ function copy(text: string) {
                         </div>
                         <p class="text-sm text-gray-400">slug: <code>{{ c.slug }}</code> · {{ c.contact_email || 'sem email' }}</p>
                         <p class="mt-1 text-xs text-gray-400">
-                            {{ c.devices_count }} número(s) · {{ c.messages_count }} mensagem(ns) ·
-                            limite {{ c.messages_per_minute }}/min ·
-                            httpSMS {{ c.httpsms_api_key_set ? '✅ configurado' : '⚠️ sem key' }}
+                            {{ c.messages_count }} mensagem(ns) · limite {{ c.messages_per_minute }}/min ·
+                            usa o pool de números da plataforma
                         </p>
                     </div>
                     <div class="flex gap-2">
-                        <button @click="syncDevices(c)" title="Sincronizar números" class="rounded-lg border border-gray-300 p-2 hover:bg-gray-50 dark:border-gray-600 dark:hover:bg-gray-700"><ArrowPathIcon class="h-4 w-4 text-gray-500" /></button>
+                        <Link :href="route('companies.usage', c.id)" title="Ver consumo" class="rounded-lg border border-gray-300 p-2 hover:bg-gray-50 dark:border-gray-600 dark:hover:bg-gray-700"><ChartBarIcon class="h-4 w-4 text-gray-500" /></Link>
                         <button @click="genToken(c)" title="Gerar token" class="rounded-lg border border-gray-300 p-2 hover:bg-gray-50 dark:border-gray-600 dark:hover:bg-gray-700"><KeyIcon class="h-4 w-4 text-gray-500" /></button>
                         <button @click="openEdit(c)" class="rounded-lg border border-gray-300 p-2 hover:bg-gray-50 dark:border-gray-600 dark:hover:bg-gray-700"><PencilSquareIcon class="h-4 w-4 text-gray-500" /></button>
                         <button @click="destroy(c)" class="rounded-lg border border-gray-300 p-2 hover:bg-red-50 dark:border-gray-600"><TrashIcon class="h-4 w-4 text-red-500" /></button>
+                    </div>
+                </div>
+
+                <!-- Números atribuídos -->
+                <div class="mt-4 border-t border-gray-100 pt-3 dark:border-gray-700">
+                    <p class="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400">Números dedicados</p>
+                    <div v-if="c.numbers.length" class="mb-2 flex flex-wrap gap-2">
+                        <span v-for="n in c.numbers" :key="n.id" class="inline-flex items-center gap-1.5 rounded-full bg-brand-50 px-2.5 py-1 text-sm text-brand-700 dark:bg-brand-500/10 dark:text-brand-300">
+                            {{ n.phone_number }}
+                            <span class="h-1.5 w-1.5 rounded-full" :class="n.status === 'online' ? 'bg-emerald-500' : 'bg-gray-400'" />
+                            <button @click="unassignNumber(c, n)" class="ml-1 text-red-500 hover:text-red-600">&times;</button>
+                        </span>
+                    </div>
+                    <p v-else class="mb-2 text-sm text-gray-400">Sem números dedicados — usa o <strong>pool partilhado</strong> da plataforma.</p>
+                    <div v-if="availableNumbers.length" class="flex items-center gap-2">
+                        <select v-model="selectedNumber[c.id]" class="rounded-lg border-gray-300 text-sm dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100">
+                            <option value="">Atribuir número do pool…</option>
+                            <option v-for="n in availableNumbers" :key="n.id" :value="n.id">{{ n.phone_number }} ({{ n.status }})</option>
+                        </select>
+                        <button @click="assignNumber(c)" :disabled="!selectedNumber[c.id]" class="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50">Atribuir</button>
                     </div>
                 </div>
 
@@ -184,16 +219,6 @@ function copy(text: string) {
                         <label class="text-sm text-gray-600 dark:text-gray-300">Email de contacto</label>
                         <input v-model="form.contact_email" type="email" class="mt-1 w-full rounded-lg border-gray-300 text-sm dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100" />
                     </div>
-                    <div class="grid grid-cols-2 gap-3">
-                        <div>
-                            <label class="text-sm text-gray-600 dark:text-gray-300">httpSMS — URL base</label>
-                            <input v-model="form.httpsms_base_url" class="mt-1 w-full rounded-lg border-gray-300 text-sm dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100" />
-                        </div>
-                        <div>
-                            <label class="text-sm text-gray-600 dark:text-gray-300">httpSMS — API Key {{ editingId ? '(deixa vazio p/ manter)' : '' }}</label>
-                            <input v-model="form.httpsms_api_key" type="password" class="mt-1 w-full rounded-lg border-gray-300 text-sm dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100" />
-                        </div>
-                    </div>
                     <div>
                         <label class="text-sm text-gray-600 dark:text-gray-300">Status Callback URL (webhook da empresa)</label>
                         <input v-model="form.status_callback_url" placeholder="https://app-da-empresa.com/sms/callback" class="mt-1 w-full rounded-lg border-gray-300 text-sm dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100" />
@@ -206,6 +231,16 @@ function copy(text: string) {
                         <div>
                             <label class="text-sm text-gray-600 dark:text-gray-300">Limite (SMS/min)</label>
                             <input v-model.number="form.messages_per_minute" type="number" min="1" class="mt-1 w-full rounded-lg border-gray-300 text-sm dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100" />
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label class="text-sm text-gray-600 dark:text-gray-300">Preço por SMS (segmento)</label>
+                            <input v-model.number="form.price_per_segment" type="number" step="0.0001" min="0" class="mt-1 w-full rounded-lg border-gray-300 text-sm dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100" />
+                        </div>
+                        <div>
+                            <label class="text-sm text-gray-600 dark:text-gray-300">Moeda</label>
+                            <input v-model="form.currency" maxlength="8" class="mt-1 w-full rounded-lg border-gray-300 text-sm dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100" />
                         </div>
                     </div>
                     <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">

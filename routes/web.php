@@ -49,7 +49,9 @@ Route::middleware(['auth', 'verified'])->group(function () {
         ->only(['index', 'store', 'update', 'destroy']);
     Route::post('companies/{company}/tokens', [CompanyController::class, 'generateToken'])->name('companies.tokens.store');
     Route::delete('companies/{company}/tokens/{token}', [CompanyController::class, 'revokeToken'])->name('companies.tokens.revoke');
-    Route::post('companies/{company}/sync', [CompanyController::class, 'sync'])->name('companies.sync');
+    Route::get('companies/{company}/usage', [CompanyController::class, 'usage'])->name('companies.usage');
+    Route::post('companies/{company}/numbers', [CompanyController::class, 'assignNumber'])->name('companies.numbers.assign');
+    Route::delete('companies/{company}/numbers/{device}', [CompanyController::class, 'unassignNumber'])->name('companies.numbers.unassign');
 
     // Gestão de utilizadores
     Route::resource('users', UserController::class)

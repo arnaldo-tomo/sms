@@ -6,20 +6,44 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\SendMessageRequest;
 use App\Http\Resources\Api\ApiMessageResource;
 use App\Models\Company;
-use App\Models\Message;
+use App\Models\Device;
+use App\Services\HttpSms\HttpSmsClient;
 use App\Services\SmsService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class MessageController extends Controller
 {
-    public function __construct(private readonly SmsService $sms)
-    {
+    public function __construct(
+        private readonly SmsService $sms,
+        private readonly HttpSmsClient $platform,
+    ) {
     }
 
     private function company(Request $request): Company
     {
         return $request->attributes->get('company');
+    }
+
+    /**
+     * Resolve o número de origem a partir do POOL da plataforma.
+     * Se a empresa tiver números atribuídos, escolhe entre esses; caso
+     * contrário pode usar qualquer número ativo da plataforma.
+     */
+    private function resolveSenderNumber(Request $request, Company $company): ?Device
+    {
+        // Pool da empresa: os seus números dedicados + o pool partilhado (sem dono).
+        $pool = fn () => Device::query()
+            ->where('is_active', true)
+            ->where(fn ($q) => $q->where('company_id', $company->id)->orWhereNull('company_id'));
+
+        if ($request->filled('from')) {
+            return $pool()->where('phone_number', $request->string('from'))->first();
+        }
+
+        // Auto-seleção: prefere os dedicados e os que estão online.
+        return $pool()->orderByRaw('company_id is null')->where('status', 'online')->first()
+            ?? $pool()->orderByRaw('company_id is null')->first();
     }
 
     /**
@@ -29,24 +53,24 @@ class MessageController extends Controller
     {
         $company = $this->company($request);
 
-        if (! $company->isConfigured()) {
+        // Verifica que a PLATAFORMA tem a integração httpSMS configurada.
+        if (! $this->platform->isConfigured()) {
             return response()->json([
-                'error' => 'company_not_configured',
-                'message' => 'A empresa não tem a integração httpSMS configurada (API key em falta).',
-            ], 422);
+                'error' => 'platform_not_configured',
+                'message' => 'O serviço de SMS não está disponível de momento.',
+            ], 503);
         }
 
-        // Resolve o número de origem: o indicado, ou o primeiro dispositivo da empresa.
-        $device = $request->filled('from')
-            ? $company->devices()->where('phone_number', $request->string('from'))->first()
-            : $company->devices()->where('is_active', true)->first();
+        // Número de origem: escolhido pela empresa, do POOL de números da plataforma.
+        // Se não for indicado, o sistema escolhe um (prefere um que esteja online).
+        $device = $this->resolveSenderNumber($request, $company);
 
         if (! $device) {
             return response()->json([
                 'error' => 'no_sender_number',
                 'message' => $request->filled('from')
-                    ? "O número '{$request->string('from')}' não pertence a esta empresa."
-                    : 'A empresa não tem nenhum número/dispositivo associado. Sincroniza um dispositivo primeiro.',
+                    ? "O número '{$request->string('from')}' não está disponível."
+                    : 'Não há nenhum número disponível para enviar.',
             ], 422);
         }
 

@@ -21,6 +21,8 @@ class Company extends Model
         'status_callback_url',
         'callback_secret',
         'messages_per_minute',
+        'price_per_segment',
+        'currency',
         'is_active',
     ];
 
@@ -32,6 +34,7 @@ class Company extends Model
     protected $casts = [
         'is_active' => 'boolean',
         'messages_per_minute' => 'integer',
+        'price_per_segment' => 'decimal:4',
     ];
 
     protected static function booted(): void

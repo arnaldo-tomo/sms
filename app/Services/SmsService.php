@@ -61,19 +61,31 @@ class SmsService
             });
         });
 
-        $queue = $this->settings->get('queue_name', 'default');
-
-        foreach ($messages as $message) {
-            $job = (new SendSmsJob($message->id))->onQueue($queue);
-
-            if ($isScheduled) {
-                $job->delay($scheduledAt);
+        // Mensagens agendadas ficam em estado "scheduled" e são despachadas
+        // pelo comando sms:dispatch-scheduled quando a hora chega (mais fiável
+        // do que jobs com delay, que se perdem se a fila for reiniciada/limpa).
+        if (! $isScheduled) {
+            foreach ($messages as $message) {
+                $this->queueForSending($message);
             }
-
-            dispatch($job);
         }
 
         return $messages;
+    }
+
+    /**
+     * Marca a mensagem como "queued" e coloca o job de envio na fila.
+     * Usado tanto para envio imediato como para mensagens agendadas que venceram.
+     */
+    public function queueForSending(Message $message): void
+    {
+        $queue = $this->settings->get('queue_name', 'default');
+
+        if ($message->status !== Message::STATUS_QUEUED) {
+            $message->update(['status' => Message::STATUS_QUEUED]);
+        }
+
+        dispatch((new SendSmsJob($message->id))->onQueue($queue));
     }
 
     /**
@@ -111,20 +123,11 @@ class SmsService
     }
 
     /**
-     * Devolve o cliente httpSMS correto: o da empresa (se a mensagem for de uma
-     * empresa) ou o cliente global (definições da plataforma).
+     * Modelo centralizado: todos os SMS (web ou API de empresas) saem pela
+     * conta httpSMS da PLATAFORMA. As empresas apenas escolhem o número.
      */
     private function clientFor(Message $message): HttpSmsClient
     {
-        $message->loadMissing('company');
-
-        if ($message->company && filled($message->company->httpsms_api_key)) {
-            return $this->client->withCredentials(
-                $message->company->httpsms_api_key,
-                $message->company->httpsms_base_url,
-            );
-        }
-
         return $this->client;
     }
 
