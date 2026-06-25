@@ -54,9 +54,29 @@ const features = [
         <!-- Painel de marca -->
         <div class="relative hidden w-1/2 overflow-hidden bg-gradient-to-br from-brand-600 via-brand-700 to-indigo-900 lg:flex lg:flex-col lg:justify-between lg:p-12">
             <!-- formas decorativas -->
-            <div class="pointer-events-none absolute inset-0 opacity-20">
-                <div class="absolute -left-20 -top-20 h-80 w-80 rounded-full bg-white/30 blur-3xl" />
-                <div class="absolute bottom-0 right-0 h-96 w-96 rounded-full bg-indigo-400/40 blur-3xl" />
+            <div class="pointer-events-none absolute inset-0 z-0">
+                <!-- Glow background bubbles -->
+                <div class="absolute -left-20 -top-20 h-96 w-96 rounded-full bg-white/10 blur-3xl" />
+                <div class="absolute bottom-0 right-0 h-96 w-96 rounded-full bg-indigo-400/20 blur-3xl" />
+                
+                <!-- Tech Grid (lines and square dots) -->
+                <svg class="absolute inset-0 h-full w-full opacity-20" xmlns="http://www.w3.org/2000/svg">
+                    <defs>
+                        <pattern id="brand-grid" width="48" height="48" patternUnits="userSpaceOnUse">
+                            <path d="M 48 0 L 0 0 0 48" fill="none" stroke="rgba(255,255,255,0.15)" stroke-width="1.5" />
+                            <rect x="-3" y="-3" width="6" height="6" fill="rgba(255,255,255,0.3)" />
+                        </pattern>
+                    </defs>
+                    <rect width="100%" height="100%" fill="url(#brand-grid)" />
+                </svg>
+                
+                <!-- Floating Square Particles -->
+                <div class="absolute inset-0 overflow-hidden">
+                    <div class="absolute top-[20%] left-[30%] h-8 w-8 rounded-md bg-white/5 border border-white/10 animate-float" style="animation-delay: 0s;"></div>
+                    <div class="absolute top-[60%] left-[75%] h-14 w-14 rounded-lg bg-white/10 border border-white/20 animate-float-reverse" style="animation-delay: 2s;"></div>
+                    <div class="absolute bottom-[25%] left-[15%] h-10 w-10 rounded-lg bg-white/5 border border-white/10 animate-float" style="animation-delay: 4s;"></div>
+                    <div class="absolute top-[40%] left-[80%] h-6 w-6 rounded-md bg-white/10 animate-pulse-slow" style="animation-delay: 1s;"></div>
+                </div>
             </div>
 
             <div class="relative z-10 flex items-center gap-3 text-white">
@@ -95,8 +115,21 @@ const features = [
         </div>
 
         <!-- Painel do formulário -->
-        <div class="flex w-full flex-col justify-center px-6 py-12 sm:px-12 lg:w-1/2 lg:px-20">
-            <div class="absolute right-5 top-5">
+        <div class="relative flex w-full flex-col justify-center px-6 py-12 sm:px-12 lg:w-1/2 lg:px-20">
+            <!-- Subtle Grid Background for form panel -->
+            <div class="pointer-events-none absolute inset-0 z-0 opacity-40">
+                <svg class="h-full w-full text-gray-200 dark:text-gray-800/40" xmlns="http://www.w3.org/2000/svg">
+                    <defs>
+                        <pattern id="form-grid" width="40" height="40" patternUnits="userSpaceOnUse">
+                            <path d="M 40 0 L 0 0 0 40" fill="none" stroke="currentColor" stroke-width="1" stroke-dasharray="2,2" />
+                            <rect x="-1.5" y="-1.5" width="3" height="3" fill="currentColor" />
+                        </pattern>
+                    </defs>
+                    <rect width="100%" height="100%" fill="url(#form-grid)" />
+                </svg>
+            </div>
+
+            <div class="absolute right-5 top-5 z-10">
                 <button
                     @click="toggle"
                     class="rounded-lg p-2 text-gray-400 transition hover:bg-gray-100 dark:hover:bg-gray-800"
@@ -107,7 +140,7 @@ const features = [
                 </button>
             </div>
 
-            <div class="mx-auto w-full max-w-md">
+            <div class="relative z-10 mx-auto w-full max-w-md">
                 <!-- logo mobile -->
                 <div class="mb-8 flex items-center gap-3 lg:hidden">
                     <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-600 text-white">
@@ -218,3 +251,44 @@ const features = [
         </div>
     </div>
 </template>
+
+<style scoped>
+@keyframes float {
+    0%, 100% {
+        transform: translateY(0) rotate(0deg);
+    }
+    50% {
+        transform: translateY(-15px) rotate(8deg);
+    }
+}
+
+@keyframes float-reverse {
+    0%, 100% {
+        transform: translateY(0) rotate(0deg);
+    }
+    50% {
+        transform: translateY(15px) rotate(-8deg);
+    }
+}
+
+@keyframes pulse-slow {
+    0%, 100% {
+        opacity: 0.2;
+    }
+    50% {
+        opacity: 0.6;
+    }
+}
+
+.animate-float {
+    animation: float 8s ease-in-out infinite;
+}
+
+.animate-float-reverse {
+    animation: float-reverse 10s ease-in-out infinite;
+}
+
+.animate-pulse-slow {
+    animation: pulse-slow 6s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+</style>
